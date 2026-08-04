@@ -1,0 +1,9 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+Package.resolved
+
+# Local tooling, not part of the project
+.rollout/
+.claude/
