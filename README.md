@@ -70,8 +70,11 @@ files are **copied**, never moved, so dragging out of Finder is non-destructive.
 
 Only one prompt matters: **Automation → Spotify**, for artwork and transport
 control. Everything else — the recording indicator, the network and battery
-readouts, click-outside-to-collapse — uses APIs that need no grant at all. Details
-and graceful-degradation behaviour in [docs/PERMISSIONS.md](docs/PERMISSIONS.md).
+readouts, click-outside-to-collapse — uses APIs that need no grant at all.
+
+If Automation is denied, track metadata still arrives over Spotify's distributed
+notification; artwork and transport controls go dead, and the card offers a button
+that deep-links to the right settings pane.
 
 ## Development
 
@@ -86,15 +89,6 @@ one hand. From the bundled app, stream the log instead:
 ```bash
 log stream --predicate 'subsystem == "com.qwerty.dynamicisland"'
 ```
-
-## Docs
-
-- [Architecture](docs/ARCHITECTURE.md) — module map, state machine, animation
-  physics, rendering strategy, and the reasoning behind the awkward parts
-- [Performance](docs/PERFORMANCE.md) — where the frame drops came from, what fixed
-  them, and how the numbers were measured
-- [Permissions](docs/PERMISSIONS.md) — what's asked for, when, and what breaks
-  without it
 
 ## Licence
 
