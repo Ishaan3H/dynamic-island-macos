@@ -14,20 +14,14 @@ final class Config: ObservableObject {
     /// this only advances the scrubber, so it can stay lazy.
     @Published var progressTick: TimeInterval = 1.0
 
-    /// Collapsed pill's frame origin in AppKit global coordinates, or `nil` for
-    /// the default top-right corner. Written on drag *end* only — persisting on
-    /// every frame of a drag would be dozens of disk writes per gesture.
-    private(set) var pillOrigin: CGPoint?
-
-    func savePillOrigin(_ origin: CGPoint?) {
-        pillOrigin = origin
-        save()
-    }
+    /// Which calendar dictated events go to, by title. `nil` means "decide
+    /// automatically" — see `CalendarService.preferredCalendar()`. Set this when
+    /// the automatic choice isn't the calendar you want.
+    @Published var calendarTitle: String? { didSet { save() } }
 
     private struct Payload: Codable {
         var mirrorRoot: String
-        var pillX: Double?
-        var pillY: Double?
+        var calendarTitle: String?
     }
 
     static let supportDirectory: URL = {
@@ -51,9 +45,7 @@ final class Config: ObservableObject {
         if let data = try? Data(contentsOf: Self.configURL),
            let payload = try? JSONDecoder().decode(Payload.self, from: data) {
             mirrorRoot = URL(fileURLWithPath: payload.mirrorRoot, isDirectory: true)
-            if let x = payload.pillX, let y = payload.pillY {
-                pillOrigin = CGPoint(x: x, y: y)
-            }
+            calendarTitle = payload.calendarTitle
         } else {
             mirrorRoot = Self.defaultMirrorRoot
         }
@@ -65,11 +57,7 @@ final class Config: ObservableObject {
     }
 
     private func save() {
-        var payload = Payload(mirrorRoot: mirrorRoot.path, pillX: nil, pillY: nil)
-        if let origin = pillOrigin {
-            payload.pillX = Double(origin.x)
-            payload.pillY = Double(origin.y)
-        }
+        let payload = Payload(mirrorRoot: mirrorRoot.path, calendarTitle: calendarTitle)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         try? data.write(to: Self.configURL, options: .atomic)
     }

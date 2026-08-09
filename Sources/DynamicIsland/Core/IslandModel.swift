@@ -26,14 +26,9 @@ final class IslandModel: ObservableObject {
 
     @Published private(set) var mode: IslandMode = .collapsed
     @Published var face: IslandFace = .media
-    /// Which corner stays put as the island grows. Owned by the window controller,
-    /// which is the only thing that knows about screens.
-    @Published var anchor = IslandAnchor()
-    /// True while the island is being dragged to a new position.
-    @Published var isMoving = false
-
-    /// Set by the window controller: `(translationFromDragStart, isFinished)`.
-    var moveHandler: ((CGSize, Bool) -> Void)?
+    /// Notch metrics for the screen the island lives on. Owned by the window
+    /// controller, which is the only thing that knows about screens.
+    @Published var notch: NotchMetrics = .fallback
     @Published var isDropTargeted = false
     @Published var selectedFolder: URL?
     @Published var newFolderName = ""
@@ -47,6 +42,10 @@ final class IslandModel: ObservableObject {
     let deviceActivity = DeviceActivityMonitor()
     let calls = CallMonitor()
     let status = SystemStatusService()
+    let voice = VoiceAssistant()
+
+    /// Convenience for diagnostics; the assistant owns it.
+    var calendar: CalendarService { voice.calendar }
 
     /// Sticky open, set by a click. Survives the pointer leaving; only a click on
     /// the header or outside the island clears it.
@@ -64,6 +63,9 @@ final class IslandModel: ObservableObject {
         deviceActivity.start()
         calls.start(deviceActivity: deviceActivity)
         status.start()
+
+        voice.onPhaseChange = { [weak self] in self?.recomputeMode() }
+        voice.start()
 
         // Only two things reorder the priority ladder from outside: a call
         // arriving, and audio starting or stopping. Both are de-duplicated so a
@@ -101,6 +103,7 @@ final class IslandModel: ObservableObject {
         spotify.stop()
         deviceActivity.stop()
         status.stop()
+        voice.stop()
     }
 
     // MARK: - Mode resolution
@@ -112,6 +115,9 @@ final class IslandModel: ObservableObject {
     /// space: a call, or a drag being held over it.
     private func resolveMode() -> IslandMode {
         if calls.activeCall != nil { return .alert }
+        // Voice outranks the open card: the user just pressed a global chord and
+        // is talking, so that is unambiguously what they want to see.
+        if voice.phase.isActive { return .listening }
         // Only the *collapsed* island morphs into a generic drop zone. Once it is
         // open the vault is already showing, with per-folder drop targets that are
         // more useful than a catch-all — and swapping the content out mid-drag
@@ -142,8 +148,6 @@ final class IslandModel: ObservableObject {
     /// Bare clicks on the island. Buttons consume their own hits before this runs,
     /// so pressing play never also toggles the expansion.
     func handleTap(_ zone: TapZone) {
-        // A reposition drag ends with a click-like event at the drop point.
-        guard !isMoving else { return }
         Log.debug("tap \(zone) (expanded=\(isExpanded))")
         switch zone {
         case .header:
@@ -153,20 +157,6 @@ final class IslandModel: ObservableObject {
             // Already open: let the click fall through to content interaction.
             guard !isExpanded else { return }
             expand()
-        }
-    }
-
-    /// A drag that moves the island must not also be read as a click that opens
-    /// it, so the tap handler checks this.
-    func move(translation: CGSize, finished: Bool) {
-        if !isMoving { isMoving = true }
-        moveHandler?(translation, finished)
-        if finished {
-            // Cleared a beat later: the tap gesture resolves after the drag ends,
-            // and would otherwise expand the island the moment you let go.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                self?.isMoving = false
-            }
         }
     }
 

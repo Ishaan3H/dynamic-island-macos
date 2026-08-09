@@ -2,12 +2,13 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Owns the panel, places it wherever the user has dragged the island, and keeps
-/// the hit-test region in sync with the island's current size and anchor.
+/// Owns the panel, parks it over the notch, and keeps the hit-test region in sync
+/// with the island's current size.
 ///
-/// Position is stored as the *collapsed pill's* origin — the thing the user sees
-/// and grabs — with the canvas frame derived from it. Storing the canvas origin
-/// instead would make the saved position meaningless the moment the anchor flips.
+/// The island is permanently centred on the notch — there is no drag-to-reposition
+/// and no anchor to flip, which removed a good deal of machinery. The canvas is
+/// horizontally centred on `screen.frame.midX` and flush with the top of the
+/// screen, so the island appears to descend out of the cutout.
 final class IslandWindowController {
 
     private(set) var panel: IslandPanel!
@@ -15,26 +16,13 @@ final class IslandWindowController {
     private let model: IslandModel
     private var cancellables = Set<AnyCancellable>()
 
-    /// The panel never resizes; it is permanently the size of the largest state.
-    /// See `IslandHostingView` for why.
-    static var canvasSize: CGSize { IslandGeometry.canvas }
-
     /// Mode the hit region currently reflects. Lags `model.mode` while shrinking —
     /// see `apply(mode:)`.
     private var interactiveMode: IslandMode = .collapsed
     private var shrinkWork: DispatchWorkItem?
 
-    /// Collapsed pill's frame origin, AppKit global coordinates.
-    private var pillOrigin: CGPoint = .zero
-    /// Screen-space mouse position and pill origin at the start of a reposition
-    /// drag. See `move(by:finished:)` for why both are needed.
-    private var dragStartMouse: CGPoint?
-    private var dragStartPill: CGPoint?
-
-    private var currentScreen: NSScreen {
-        NSScreen.screens.first { $0.frame.contains(pillOrigin) }
-            ?? NSScreen.main
-            ?? NSScreen.screens[0]
+    private var screen: NSScreen {
+        NSScreen.main ?? NSScreen.screens.first ?? NSScreen.screens[0]
     }
 
     init(model: IslandModel) {
@@ -47,14 +35,11 @@ final class IslandWindowController {
     // MARK: - Construction
 
     private func buildPanel() {
-        let screen = NSScreen.main ?? NSScreen.screens[0]
-        pillOrigin = Config.shared.pillOrigin ?? IslandGeometry.defaultPillOrigin(on: screen)
-        model.anchor = IslandGeometry.anchor(forPillOrigin: pillOrigin, on: screen)
-        // A saved position can be off-screen after a display change or an
-        // external monitor being unplugged; pull it back into view.
-        pillOrigin = IslandGeometry.clampPillOrigin(pillOrigin, anchor: model.anchor, on: screen)
-        let frame = IslandGeometry.canvasFrame(pillOrigin: pillOrigin, anchor: model.anchor)
+        let screen = self.screen
+        let notch = NotchMetrics.of(screen)
+        model.notch = notch
 
+        let frame = IslandGeometry.canvasFrame(on: screen)
         panel = IslandPanel(contentRect: frame)
 
         let root = AnyView(
@@ -66,124 +51,37 @@ final class IslandWindowController {
                 .environmentObject(model.deviceActivity)
                 .environmentObject(model.calls)
                 .environmentObject(model.status)
+                .environmentObject(model.voice)
         )
 
         hostingView = IslandHostingView(rootView: root)
-        hostingView.interactiveRect = { [weak self] in self?.currentPillRect() ?? .zero }
-        model.moveHandler = { [weak self] translation, finished in
-            self?.move(by: translation, finished: finished)
-        }
+        hostingView.interactiveRect = { [weak self] in self?.currentIslandRect() ?? .zero }
 
         panel.contentView = hostingView
         panel.orderFrontRegardless()
         hostingView.refreshInteractiveRegion()
-        Log.debug("panel at \(NSStringFromRect(frame)) on screen \(NSStringFromRect(screen.frame))")
+
+        Log.debug("""
+        panel at \(NSStringFromRect(frame)) — notch \(notch.hasNotch ? "present" : "absent") \
+        \(notch.width)x\(notch.height)pt on screen \(NSStringFromRect(screen.frame))
+        """)
     }
 
-    /// The pill is anchored to the top-trailing corner of the canvas.
+    /// The island is centred horizontally and pinned to the top of the canvas.
     ///
-    /// Which y that is depends on the view's orientation, and getting it wrong is
-    /// invisible until you test it: `NSHostingView` is **flipped** (origin
-    /// top-left), unlike a plain `NSView`. Computing `bounds.maxY - height` here —
-    /// correct for unflipped AppKit — put the hit region at the *bottom* of the
-    /// 486 pt canvas, hundreds of points below the pill, so clicks on the island
-    /// missed entirely while an invisible strip underneath it caught them.
-    private func currentPillRect() -> CGRect {
+    /// `isFlipped` matters: `NSHostingView` is flipped (origin top-left), unlike a
+    /// plain `NSView`. Getting it backwards puts the hit region at the bottom of
+    /// the canvas — which once made the island completely unclickable while an
+    /// invisible strip below it swallowed every hit.
+    private func currentIslandRect() -> CGRect {
         guard let view = hostingView else { return .zero }
-        // A few points of slop around the collapsed pill make it easier to hit and
-        // give drags somewhere to land before the island opens.
         return IslandGeometry.hitRect(
             for: interactiveMode,
             face: model.face,
             in: view.bounds,
-            anchor: model.anchor,
-            flipped: view.isFlipped,
-            slop: interactiveMode == .collapsed ? 6 : 0
+            notch: model.notch,
+            flipped: view.isFlipped
         )
-    }
-
-    // MARK: - Repositioning
-
-    /// Moves the island to follow the pointer.
-    ///
-    /// The offset comes from `NSEvent.mouseLocation` — screen space — and
-    /// deliberately **not** from the gesture's own `translation`. SwiftUI measures
-    /// translation relative to the view, and this function moves that view; the
-    /// two form a feedback loop where each frame's window move cancels part of the
-    /// next frame's reported translation, and the island travels at roughly half
-    /// the speed of the cursor.
-    ///
-    /// `translation` is still used once, to recover the true gesture origin: the
-    /// first callback only arrives after `minimumDistance`, and at that instant
-    /// nothing has moved yet, so it is still accurate.
-    private func move(by translation: CGSize, finished: Bool) {
-        let mouse = NSEvent.mouseLocation
-
-        if dragStartMouse == nil {
-            // AppKit y grows upward, SwiftUI translation grows downward.
-            dragStartMouse = CGPoint(x: mouse.x - translation.width, y: mouse.y + translation.height)
-            dragStartPill = pillOrigin
-        }
-        guard let startMouse = dragStartMouse, let startPill = dragStartPill else { return }
-
-        var next = CGPoint(
-            x: startPill.x + (mouse.x - startMouse.x),
-            y: startPill.y + (mouse.y - startMouse.y)
-        )
-        let screen = NSScreen.screens.first { $0.frame.contains(next) } ?? currentScreen
-
-        // Only the pill is constrained mid-drag. Clamping the whole canvas here
-        // would stop the island well short of the bottom-left corner, because the
-        // anchor still points the old way until the gesture ends.
-        next = IslandGeometry.clampPill(next, to: screen)
-        pillOrigin = next
-        panel.setFrameOrigin(
-            IslandGeometry.canvasFrame(pillOrigin: next, anchor: model.anchor).origin)
-
-        guard finished else { return }
-        dragStartMouse = nil
-        dragStartPill = nil
-        settlePosition()
-        Config.shared.savePillOrigin(pillOrigin)
-        Log.debug("island moved to \(NSStringFromPoint(pillOrigin)) anchor=\(model.anchor)")
-    }
-
-    /// Re-picks the growth corner and pulls the canvas fully on screen.
-    ///
-    /// Re-anchoring moves nothing visible while collapsed — the pill's own frame
-    /// is the invariant, and only the invisible canvas shifts around it. While
-    /// expanded it *would* jump the open card across the pill, so the flip is
-    /// deferred until the island next closes.
-    private func settlePosition() {
-        let screen = currentScreen
-
-        if model.mode == .collapsed {
-            let next = IslandGeometry.anchor(forPillOrigin: pillOrigin, on: screen)
-            if next != model.anchor { model.anchor = next }
-        }
-
-        pillOrigin = IslandGeometry.clampPillOrigin(pillOrigin, anchor: model.anchor, on: screen)
-        panel.setFrame(
-            IslandGeometry.canvasFrame(pillOrigin: pillOrigin, anchor: model.anchor), display: true)
-        hostingView.refreshInteractiveRegion()
-    }
-
-    /// Returns the island to the default top-right corner.
-    func resetPosition() {
-        let screen = NSScreen.main ?? NSScreen.screens[0]
-        pillOrigin = IslandGeometry.defaultPillOrigin(on: screen)
-        model.anchor = IslandGeometry.anchor(forPillOrigin: pillOrigin, on: screen)
-        Config.shared.savePillOrigin(nil)
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.28
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(
-                IslandGeometry.canvasFrame(pillOrigin: pillOrigin, anchor: model.anchor),
-                display: true)
-        } completionHandler: { [weak self] in
-            self?.hostingView.refreshInteractiveRegion()
-        }
     }
 
     // MARK: - Observation
@@ -192,11 +90,7 @@ final class IslandWindowController {
         model.$mode
             .removeDuplicates()
             .receive(on: RunLoop.main)
-            .sink { [weak self] mode in
-                self?.apply(mode: mode)
-                // An anchor flip deferred during expansion lands here.
-                if mode == .collapsed { self?.settlePosition() }
-            }
+            .sink { [weak self] mode in self?.apply(mode: mode) }
             .store(in: &cancellables)
 
         // Switching face resizes the expanded island, so the hit region has to
@@ -213,15 +107,11 @@ final class IslandWindowController {
     }
 
     /// Grow the hit region immediately, shrink it only once the spring has settled.
-    ///
-    /// If it shrank on the leading edge, the pointer would fall outside the
-    /// tracking area while the pill was still visually large underneath it — which
-    /// reads as the island collapsing out from under the cursor.
     private func apply(mode: IslandMode, force: Bool = false) {
         shrinkWork?.cancel()
 
-        let current = IslandGeometry.size(for: interactiveMode, face: model.face)
-        let next = IslandGeometry.size(for: mode, face: model.face)
+        let current = IslandGeometry.size(for: interactiveMode, face: model.face, notch: model.notch)
+        let next = IslandGeometry.size(for: mode, face: model.face, notch: model.notch)
         let isGrowing = next.width * next.height >= current.width * current.height
 
         if isGrowing || force {
@@ -233,7 +123,6 @@ final class IslandWindowController {
                 self?.hostingView.refreshInteractiveRegion()
             }
             shrinkWork = work
-            // Slightly longer than the collapse spring's settling time.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.36, execute: work)
         }
     }
@@ -245,9 +134,13 @@ final class IslandWindowController {
             .store(in: &cancellables)
     }
 
-    /// Re-applies the current position after a display change, pulling the island
-    /// back on screen if the arrangement shrank underneath it.
+    /// Re-derives notch metrics and reparks the panel. Docking to an external
+    /// display changes both the notch (there may not be one) and the centre line.
     func reposition() {
-        settlePosition()
+        let screen = self.screen
+        model.notch = NotchMetrics.of(screen)
+        panel.setFrame(IslandGeometry.canvasFrame(on: screen), display: true)
+        hostingView.refreshInteractiveRegion()
+        Log.debug("repositioned onto \(screen.localizedName), notch \(model.notch.width)x\(model.notch.height)")
     }
 }

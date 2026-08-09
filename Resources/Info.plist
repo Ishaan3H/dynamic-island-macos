@@ -35,15 +35,31 @@
     <string>Dynamic Island uses Spotify’s scripting interface to read the current track and control playback from the island.</string>
 
     <!--
-      Declared for completeness. The recording indicator reads the hardware
-      "is running somewhere" flag and never opens a stream, so these prompts
-      should not appear in normal use — but macOS requires the keys to exist
-      before any code path could touch the devices.
+      The camera is only ever *queried*, never opened: the recording indicator
+      reads the hardware "is running somewhere" flag. This prompt should not
+      appear in normal use, but the key must exist before any code path could
+      touch the device.
     -->
     <key>NSCameraUsageDescription</key>
     <string>Dynamic Island checks whether the camera is in use so it can show a recording indicator. It never captures video.</string>
+
+    <!--
+      The microphone genuinely IS captured, for the voice assistant — so this
+      string says so plainly. It previously claimed audio was never recorded,
+      which stopped being true the moment dictation was added; a usage
+      description is shown verbatim in the permission prompt, so an inaccurate
+      one misleads the user at exactly the moment they are deciding.
+    -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>Dynamic Island checks whether the microphone is in use so it can show a call indicator. It never records audio.</string>
+    <string>Dynamic Island records audio while you hold the voice shortcut, so it can turn what you say into a calendar event or open a vault. Audio is captured only while listening.</string>
+
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Dynamic Island transcribes your voice commands on this Mac. Recognition runs on-device, so what you say is not sent to Apple or anywhere else.</string>
+
+    <key>NSCalendarsUsageDescription</key>
+    <string>Dynamic Island adds events you dictate to your calendar.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Dynamic Island adds events you dictate to your calendar, including calendars synced from accounts such as Google.</string>
 
     <!-- dynamicisland://call?name=…&app=…&phase=incoming -->
     <key>CFBundleURLTypes</key>
