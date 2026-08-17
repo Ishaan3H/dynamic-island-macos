@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Release build
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build
+        run: swift build -c release
+
+      # Warnings are the early signal for the AppKit/SwiftUI mistakes this
+      # project is prone to — flipped coordinate spaces, unused observation.
+      - name: Fail on warnings
+        run: |
+          set -o pipefail
+          rm -rf .build
+          swift build -c release 2>&1 | tee build.log
+          if grep -q "warning:" build.log; then
+            echo "::error::build produced warnings"
+            grep "warning:" build.log
+            exit 1
+          fi
+
+      - name: Assemble .app bundle
+        run: ./build.sh release
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: DynamicIsland.app
+          path: build/DynamicIsland.app
+          if-no-files-found: error
