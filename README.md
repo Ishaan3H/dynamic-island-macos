@@ -185,6 +185,15 @@ one hand. From the bundled app, stream the log instead:
 log stream --predicate 'subsystem == "com.qwerty.dynamicisland"'
 ```
 
+## Docs
+
+- [Architecture](docs/ARCHITECTURE.md) — module map, notch layout, state machine,
+  animation physics, and the voice pipeline
+- [Performance](docs/PERFORMANCE.md) — where the frame drops came from, what fixed
+  them, and how the numbers were measured
+- [Permissions](docs/PERMISSIONS.md) — what's asked for, when, and what breaks
+  without it
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
