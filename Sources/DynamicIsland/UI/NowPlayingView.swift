@@ -43,6 +43,9 @@ struct MediaCard: View {
                     .monospacedDigit()
                 }
                 .frame(height: artworkSize)
+
+                OwlView(isPlaying: track.isPlaying, side: 46)
+                    .frame(height: artworkSize, alignment: .center)
             }
             .overlay(alignment: .top) { automationBanner }
         } else {
@@ -63,6 +66,10 @@ struct MediaCard: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
+
+            // Asleep when nothing is playing — the owl doubles as a playback tell.
+            OwlView(isPlaying: false, side: 46)
+                .frame(height: artworkSize, alignment: .center)
         }
         .frame(height: artworkSize)
     }

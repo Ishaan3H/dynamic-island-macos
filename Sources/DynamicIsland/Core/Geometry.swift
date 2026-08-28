@@ -69,6 +69,18 @@ enum IslandGeometry {
     /// and no separate "lip" is needed.
     static let idleExtensionWidth: CGFloat = 56
 
+    /// How far the island slides *under* the cutout, hiding the seam.
+    ///
+    /// The notch's own bottom-right corner is rounded. Butting a square edge
+    /// against the exact cutout boundary leaves a small lit step where that curve
+    /// falls away. Overlapping past it covers the curve, and costs nothing —
+    /// there are no pixels behind the cutout to disturb.
+    static let notchOverlap: CGFloat = 14
+
+    /// Approximate radius of the notch's lower corners. The single number to
+    /// nudge if the join still doesn't look continuous on your display.
+    static let notchCornerRadius: CGFloat = 11
+
     // MARK: Expanded
 
     static let expandedWidth: CGFloat = 400
@@ -124,7 +136,8 @@ enum IslandGeometry {
                      notch: NotchMetrics = .fallback) -> CGSize {
         switch mode {
         case .collapsed:
-            return CGSize(width: idleExtensionWidth, height: notch.height)
+            // Widened by the overlap so the *visible* nub stays `idleExtensionWidth`.
+            return CGSize(width: idleExtensionWidth + notchOverlap, height: notch.height)
         case .expanded:
             return CGSize(width: expandedWidth,
                           height: topPadding + chromeHeight + contentHeight(for: face) + bottomPadding)
@@ -140,11 +153,17 @@ enum IslandGeometry {
         }
     }
 
-    /// Bottom corner radius. The top corners stay square — they sit at the screen
-    /// edge where a radius would only open a gap against the bezel. The idle nub
-    /// stays subtle so it doesn't announce itself beside the cutout.
-    static func cornerRadius(for mode: IslandMode) -> CGFloat {
-        mode == .collapsed ? 10 : 22
+    /// Bottom-left radius. Zero while collapsed: that edge is hidden under the
+    /// cutout and continues straight out of it, so rounding it would carve a
+    /// notch-shaped bite right at the join.
+    static func bottomLeadingRadius(for mode: IslandMode) -> CGFloat {
+        mode == .collapsed ? 0 : notchCornerRadius
+    }
+
+    /// Bottom-right radius. Matches the cutout's own corner so the nub reads as
+    /// the notch continuing, not as a panel stuck to its side.
+    static func bottomTrailingRadius(for mode: IslandMode) -> CGFloat {
+        mode == .collapsed ? notchCornerRadius : 22
     }
 
     /// Largest state — the panel is permanently this size. See `IslandHostingView`.
@@ -158,9 +177,9 @@ enum IslandGeometry {
                       height: sizes.map(\.height).max() ?? 460)
     }
 
-    /// Left edge of the island: flush against the notch's trailing edge.
+    /// Left edge of the island, pulled back under the cutout by `notchOverlap`.
     static func leadingEdge(on screen: NSScreen, notch: NotchMetrics) -> CGFloat {
-        screen.frame.midX + notch.width / 2
+        screen.frame.midX + notch.width / 2 - notchOverlap
     }
 
     /// Canvas frame: left edge flush with the notch's right side, top flush with

@@ -1,79 +1,63 @@
 import SwiftUI
 
-/// The island's outline: square at the top, rounded along the bottom.
+/// The island's outline, shaped to continue the notch rather than sit beside it.
 ///
-/// A uniformly rounded rectangle is wrong here. The top edge sits flush against
-/// the top of the screen behind the camera cutout, so rounding it would round
-/// nothing visible while opening a hairline gap where the shape meets the bezel.
-/// Only the bottom corners are ever seen.
+/// Three things have to be true for the join to disappear:
+///
+/// 1. **The top edge is square.** It sits flush against the top bezel, where a
+///    radius would only open a lit gap.
+/// 2. **The leading edge is square and tucked *under* the cutout.** The notch's
+///    own bottom-right corner is rounded; a square edge meeting it at exactly the
+///    cutout boundary leaves a visible step. Overlapping into the cutout — where
+///    there are no pixels to disturb — covers that corner so the two shapes read
+///    as one.
+/// 3. **The bottom corners match the notch's radius.** The cutout's lower corners
+///    are rounded, so a hard 90° corner on the island announces itself instantly.
 struct NotchShape: Shape {
-    var bottomRadius: CGFloat
+    var bottomLeading: CGFloat
+    var bottomTrailing: CGFloat
 
-    /// Lets the radius animate alongside a size change instead of snapping.
-    var animatableData: CGFloat {
-        get { bottomRadius }
-        set { bottomRadius = newValue }
+    init(bottomLeading: CGFloat, bottomTrailing: CGFloat) {
+        self.bottomLeading = bottomLeading
+        self.bottomTrailing = bottomTrailing
+    }
+
+    /// Both radii animate together as the island resizes.
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(bottomLeading, bottomTrailing) }
+        set {
+            bottomLeading = newValue.first
+            bottomTrailing = newValue.second
+        }
     }
 
     func path(in rect: CGRect) -> Path {
-        let r = min(bottomRadius, min(rect.width, rect.height) / 2)
-        var path = Path()
+        let maxR = min(rect.width, rect.height) / 2
+        let bl = min(max(bottomLeading, 0), maxR)
+        let br = min(max(bottomTrailing, 0), maxR)
 
+        var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX - r, y: rect.maxY),
-            control: CGPoint(x: rect.maxX, y: rect.maxY)
-        )
-        path.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX, y: rect.maxY - r),
-            control: CGPoint(x: rect.minX, y: rect.maxY)
-        )
-        path.closeSubpath()
-        return path
-    }
-}
 
-/// Small concave wedges that blend the island's shoulders into the cutout, so the
-/// join reads as one continuous piece of hardware rather than a panel stuck under
-/// the notch. Purely cosmetic; drawn only when the island is wider than the notch.
-struct NotchShoulders: View {
-    let notchWidth: CGFloat
-    let notchHeight: CGFloat
-    var radius: CGFloat = 9
-
-    var body: some View {
-        HStack(spacing: notchWidth) {
-            wedge(mirrored: false)
-            wedge(mirrored: true)
+        // Down the trailing edge into the bottom-right corner.
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        if br > 0 {
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX - br, y: rect.maxY),
+                control: CGPoint(x: rect.maxX, y: rect.maxY)
+            )
         }
-        .frame(height: notchHeight, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .allowsHitTesting(false)
-    }
 
-    private func wedge(mirrored: Bool) -> some View {
-        ConcaveCorner()
-            .fill(Theme.shell)
-            .frame(width: radius, height: radius)
-            .scaleEffect(x: mirrored ? -1 : 1, y: 1, anchor: .center)
-            .frame(maxHeight: .infinity, alignment: .bottom)
-    }
-}
+        // Across the bottom into the bottom-left corner.
+        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        if bl > 0 {
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY - bl),
+                control: CGPoint(x: rect.minX, y: rect.maxY)
+            )
+        }
 
-/// A square with one corner scooped out by a quarter circle.
-private struct ConcaveCorner: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY),
-            control: CGPoint(x: rect.maxX, y: rect.maxY)
-        )
         path.closeSubpath()
         return path
     }

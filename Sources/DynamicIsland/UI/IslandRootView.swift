@@ -26,23 +26,32 @@ struct IslandRootView: View {
         let mode = model.mode
         let notch = model.notch
         let size = IslandGeometry.size(for: mode, face: model.face, notch: notch)
-        let shape = NotchShape(bottomRadius: IslandGeometry.cornerRadius(for: mode))
+        let shape = NotchShape(
+            bottomLeading: IslandGeometry.bottomLeadingRadius(for: mode),
+            bottomTrailing: IslandGeometry.bottomTrailingRadius(for: mode)
+        )
+        let isIdle = mode == .collapsed
 
         content
             .frame(width: size.width, height: size.height, alignment: .top)
             .clipShape(shape)
             .background {
+                // No shadow while idle: a halo around the nub separates it from the
+                // notch, which is the opposite of what it is trying to do.
                 shape
                     .fill(Theme.shell)
-                    .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+                    .shadow(color: .black.opacity(isIdle ? 0 : 0.4), radius: isIdle ? 0 : 14,
+                            y: isIdle ? 0 : 6)
             }
             .overlay {
-                // While open the island keeps its content during a drag rather than
-                // morphing into a drop zone, so the border carries the signal.
-                shape.stroke(
-                    model.isDropTargeted && mode == .expanded ? Theme.accent : Theme.hairline,
-                    lineWidth: model.isDropTargeted && mode == .expanded ? 1.5 : 0.5
-                )
+                // Likewise no hairline while idle — a lit outline traced around the
+                // nub is exactly the seam this is meant to hide.
+                if !isIdle {
+                    shape.stroke(
+                        model.isDropTargeted && mode == .expanded ? Theme.accent : Theme.hairline,
+                        lineWidth: model.isDropTargeted && mode == .expanded ? 1.5 : 0.5
+                    )
+                }
             }
             .overlay(alignment: .bottom) { toast }
             .contentShape(shape)
@@ -99,38 +108,15 @@ struct IslandTopPadding: View {
 
 // MARK: - Idle
 
-/// The idle state: a small nub extending the cutout rightward.
+/// The idle state: a featureless black nub extending the cutout rightward.
 ///
-/// Exactly the notch's own height, flush against its right edge, so it reads as
-/// the notch being a little wider rather than as a panel stuck to it. Live
-/// indicators sit inside it, letting the island signal activity without growing.
+/// Deliberately empty. Anything drawn here — a status dot, a level meter — is a
+/// coloured mark floating in what is meant to read as part of the hardware, and
+/// immediately gives away that the notch is being impersonated. Live indicators
+/// live in the expanded status header instead, where there is a panel to sit on.
 struct IdleLipView: View {
-    @EnvironmentObject private var model: IslandModel
-    @EnvironmentObject private var spotify: SpotifyService
-    @EnvironmentObject private var deviceActivity: DeviceActivityMonitor
-    @EnvironmentObject private var vault: VaultStore
-
     var body: some View {
-        HStack(spacing: 5) {
-                if deviceActivity.cameraActive {
-                    dot(Theme.recording)
-                }
-                if spotify.current?.isPlaying == true {
-                    EqualizerBars(color: Theme.accent, isAnimating: true)
-                        .scaleEffect(0.55)
-                        .frame(width: 12)
-                }
-            if !vault.items.isEmpty {
-                dot(Theme.accent.opacity(0.8))
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func dot(_ color: Color) -> some View {
-        Circle()
-            .fill(color)
-            .frame(width: 4, height: 4)
+        Color.clear
     }
 }
 

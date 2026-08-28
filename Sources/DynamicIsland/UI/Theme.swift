@@ -1,9 +1,14 @@
 import SwiftUI
 
 enum Theme {
-    /// Near-black, faintly translucent — the real island reads as a hole punched
-    /// in the display, so the shell stays dark regardless of system appearance.
-    static let shell = Color(nsColor: NSColor(calibratedWhite: 0.045, alpha: 0.97))
+    /// Pure black, fully opaque — matched to the notch itself.
+    ///
+    /// The cutout is an absence of display, so it renders as true black with
+    /// nothing behind it. Anything lighter, or anything translucent enough to let
+    /// the wallpaper through, shows up as a visible seam where the island meets
+    /// the notch. This was 4.5% grey at 97% alpha and read as a distinctly
+    /// different shade of dark.
+    static let shell = Color(nsColor: NSColor(calibratedWhite: 0.0, alpha: 1.0))
     static let hairline = Color.white.opacity(0.085)
     static let primary = Color.white
     static let secondary = Color.white.opacity(0.56)
