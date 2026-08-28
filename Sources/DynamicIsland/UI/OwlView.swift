@@ -17,6 +17,12 @@ struct OwlView: View {
     @State private var bobbing = false
     @State private var swaying = false
 
+    // Flourish: a hop with a couple of wingbeats, every 6–7 seconds.
+    @State private var hop: CGFloat = 0
+    @State private var crouching = false
+    @State private var wingSpread: Double = 0
+    @State private var eyesWide = false
+
     /// Awake and bobbing to the music, or asleep with eyes shut.
     private var isAwake: Bool { isPlaying }
 
@@ -29,10 +35,18 @@ struct OwlView: View {
             feet
         }
         .frame(width: side, height: side)
-        .offset(y: bobbing ? -2.5 : 1.5)
+        // Squash on the crouch, stretch slightly at the top of the hop — the
+        // anticipation is what stops it reading as a sprite being teleported.
+        .scaleEffect(x: crouching ? 1.08 : 1, y: crouching ? 0.88 : 1, anchor: .bottom)
+        .offset(y: (bobbing ? -2.5 : 1.5) + hop)
         .rotationEffect(.degrees(swaying ? 3.5 : -3.5), anchor: .bottom)
-        .onAppear { startAnimations() }
-        .onChange(of: isPlaying) { _, _ in startAnimations() }
+        .onAppear { startAmbient() }
+        .onChange(of: isPlaying) { _, _ in startAmbient() }
+        // `.task` is cancelled automatically when the view goes away, so these
+        // loops stop the moment the island collapses. A detached timer would keep
+        // firing against a dead view and stack a fresh loop on every reappearance.
+        .task(id: isPlaying) { await blinkLoop() }
+        .task { await flourishLoop() }
     }
 
     // MARK: Parts
@@ -65,13 +79,16 @@ struct OwlView: View {
     }
 
     private var wings: some View {
-        HStack {
-            wing.rotationEffect(.degrees(bobbing ? -6 : 0), anchor: .top)
+        // Idle tilt from the bob, plus up to 58° of spread during a wingbeat.
+        let beat = wingSpread * 58
+        return HStack {
+            wing.rotationEffect(.degrees((bobbing ? -6 : 0) - beat), anchor: .top)
             Spacer(minLength: 0)
-            wing.scaleEffect(x: -1).rotationEffect(.degrees(bobbing ? 6 : 0), anchor: .top)
+            wing.scaleEffect(x: -1)
+                .rotationEffect(.degrees((bobbing ? 6 : 0) + beat), anchor: .top)
         }
         .frame(width: side * 0.80)
-        .offset(y: side * 0.10)
+        .offset(y: side * 0.10 - CGFloat(wingSpread) * side * 0.06)
     }
 
     private var wing: some View {
@@ -96,19 +113,23 @@ struct OwlView: View {
             Circle()
                 .fill(Self.face)
                 .frame(width: side * 0.30, height: side * 0.30)
+                .scaleEffect(eyesWide ? 1.22 : 1)
 
             // Closed eyes are drawn as a squashed pupil rather than a separate
             // shape, so blinking and sleeping are the same transform.
             Capsule()
                 .fill(Self.pupil)
                 .frame(width: side * 0.15, height: side * 0.15)
-                .scaleEffect(y: (blinking || !isAwake) ? 0.12 : 1, anchor: .center)
+                // `eyesWide` wins over sleeping: the flourish is the owl stirring,
+                // so it snaps its eyes open even when paused.
+                .scaleEffect(y: (!eyesWide && (blinking || !isAwake)) ? 0.12 : 1, anchor: .center)
+                .scaleEffect(eyesWide ? 1.25 : 1)
                 .overlay(
                     Circle()
                         .fill(.white.opacity(0.9))
                         .frame(width: side * 0.045, height: side * 0.045)
                         .offset(x: side * 0.035, y: -side * 0.035)
-                        .opacity((blinking || !isAwake) ? 0 : 1)
+                        .opacity((!eyesWide && (blinking || !isAwake)) ? 0 : 1)
                 )
         }
     }
@@ -136,12 +157,11 @@ struct OwlView: View {
 
     // MARK: Animation
 
-    private func startAnimations() {
-        // Sway always: even asleep, a completely static owl looks like a bug.
+    /// Continuous background motion. A completely static owl looks like a bug.
+    private func startAmbient() {
         withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) {
             swaying = true
         }
-
         if isAwake {
             withAnimation(.easeInOut(duration: 0.42).repeatForever(autoreverses: true)) {
                 bobbing = true
@@ -149,22 +169,62 @@ struct OwlView: View {
         } else {
             withAnimation(.easeOut(duration: 0.3)) { bobbing = false }
         }
-
-        scheduleBlink()
     }
 
-    /// Blinks at an irregular interval. A metronomic blink reads as mechanical.
-    private func scheduleBlink() {
-        guard isAwake else { return }
-        let delay = Double.random(in: 2.2...5.0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            guard isAwake else { return }
+    /// Blinks at an irregular interval — a metronomic blink reads as mechanical.
+    private func blinkLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Double.random(in: 2.2...5.0)))
+            guard !Task.isCancelled, isAwake else { continue }
             withAnimation(.easeInOut(duration: 0.09)) { blinking = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                withAnimation(.easeInOut(duration: 0.11)) { blinking = false }
-                scheduleBlink()
-            }
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(.easeInOut(duration: 0.11)) { blinking = false }
         }
+    }
+
+    /// The flourish: crouch, hop, two wingbeats, land — roughly every 6–7s.
+    ///
+    /// Runs whether or not music is playing. Asleep, it reads as the owl briefly
+    /// stirring, which is more characterful than freezing until playback starts.
+    private func flourishLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Double.random(in: 6.0...7.0)))
+            guard !Task.isCancelled else { return }
+            await flourish()
+        }
+    }
+
+    private func flourish() async {
+        // 1. Anticipation — dip and snap the eyes open.
+        withAnimation(.easeOut(duration: 0.10)) {
+            crouching = true
+            eyesWide = true
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+
+        // 2. Leap, wings thrown out.
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.52)) {
+            crouching = false
+            hop = -side * 0.20
+            wingSpread = 1
+        }
+        try? await Task.sleep(for: .milliseconds(200))
+
+        // 3–4. Two beats. Down hard, up again.
+        withAnimation(.easeInOut(duration: 0.11)) { wingSpread = 0.12 }
+        try? await Task.sleep(for: .milliseconds(115))
+        withAnimation(.easeInOut(duration: 0.11)) { wingSpread = 0.85 }
+        try? await Task.sleep(for: .milliseconds(125))
+
+        // 5. Land, wings folded, with a little settle.
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
+            hop = 0
+            wingSpread = 0
+        }
+        try? await Task.sleep(for: .milliseconds(260))
+
+        // 6. Back to whatever the eyes were doing before.
+        withAnimation(.easeOut(duration: 0.20)) { eyesWide = false }
     }
 
     // MARK: Palette — warm tones, legible against the island's pure black.
