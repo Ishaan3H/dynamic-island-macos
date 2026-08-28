@@ -7,3 +7,7 @@ Package.resolved
 # Local tooling, not part of the project
 .rollout/
 .claude/
+
+# A clone of this repo made inside itself. `git add -A` turns it into a broken
+# submodule pointer (mode 160000, no .gitmodules), which clones as an empty dir.
+dynamic-island-macos/
