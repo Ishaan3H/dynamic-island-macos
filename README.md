@@ -57,7 +57,8 @@ notch growing.
 | Move the pointer over it | Nothing — the island never reacts to hover |
 | **Click the island** | Expands to the full card with the status header |
 | Click the header, or anywhere outside | Collapses |
-| **⌃⌥Space** | Voice assistant: dictate a calendar event or open a vault |
+| **⌃⌥Space** | Voice command: calendar event, open a vault, quick-create |
+| **⌃⌥D** | Dictation: types what you say into the focused text field |
 | Waveform / tray tabs | Switch between the media and vault faces |
 | Drag anything onto the island | Stages it in the vault |
 | Drag onto a folder row | Writes straight through to that directory |
@@ -103,6 +104,27 @@ Launch obsidian vault prototype 1
 Matched against your real vault list, tolerant of dictation: "I P M" finds `IPM`,
 "prototype one" finds `prototype 1`. If nothing scores well enough it says so
 rather than opening the wrong vault.
+
+### Dictation — ⌃⌥D
+
+Press **⌃⌥D**, talk, stop. The words are typed straight into whatever text field
+has focus — a message box, a code editor, a browser form. Press the chord again
+to finish early instead of waiting for the silence pause.
+
+Nothing is sent anywhere. Transcription is Apple's on-device recogniser
+(`requiresOnDeviceRecognition`), the same engine behind macOS Dictation. No API
+key, no account, no subscription, and it works with the Wi-Fi off.
+
+**Accessibility is required to type into other apps, and there is no way around
+that.** Synthetic keystrokes, a scripted ⌘V, and writing through the
+accessibility tree are all gated behind the same permission — which is the point
+of it, for a tool that can type into your bank. Without the grant, dictation
+still works: the text goes to the clipboard and the island tells you to press ⌘V.
+The panel says which mode you are in before you start talking.
+
+Text is inserted by synthesising the characters, not by pasting. Pasting would
+clobber whatever you had copied, and restoring it afterwards is unreliable once
+images or file promises are on the pasteboard. This leaves the clipboard alone.
 
 ### Quick create
 

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import Foundation
 
@@ -19,6 +20,14 @@ final class VoiceAssistant: ObservableObject {
         var isActive: Bool { self != .idle }
     }
 
+    /// What the next finished transcript is for.
+    ///
+    /// Both chords share one microphone and one recogniser, so dictation is a
+    /// *mode* of the existing flow rather than a parallel capture path. Two
+    /// services contending for `AVAudioEngine` would be a race, not a feature.
+    enum CaptureMode { case command, dictation }
+
+    @Published private(set) var captureMode: CaptureMode = .command
     @Published private(set) var phase: Phase = .idle
     /// Live transcript while speaking, for on-screen feedback.
     @Published private(set) var transcript = ""
@@ -27,6 +36,7 @@ final class VoiceAssistant: ObservableObject {
     let speech = SpeechService()
     let calendar = CalendarService()
     let obsidian = ObsidianService()
+    let inserter = TextInserter()
     private let hotkey = HotkeyService()
 
     /// Set by the model so mode changes can be recomputed.
@@ -39,9 +49,12 @@ final class VoiceAssistant: ObservableObject {
     // MARK: - Lifecycle
 
     func start() {
-        hotkey.onTrigger = { [weak self] in self?.toggle() }
-        if !hotkey.register() {
-            Log.debug("voice: hotkey unavailable — ⌃⌥Space may be taken by another app")
+        let failed = hotkey.register([
+            .controlOption(kVK_Space) { [weak self] in self?.toggle(.command) },
+            .controlOption(kVK_ANSI_D) { [weak self] in self?.toggle(.dictation) },
+        ])
+        if !failed.isEmpty {
+            Log.debug("voice: \(failed.count) hotkey(s) unavailable — another app may own them")
         }
 
         speech.onFinalTranscript = { [weak self] text in self?.handle(text) }
@@ -79,12 +92,16 @@ final class VoiceAssistant: ObservableObject {
 
     /// Pressing the chord while listening submits early rather than cancelling —
     /// the silence timer is a fallback, not the only way to finish.
-    func toggle() {
-        Log.debug("voice: hotkey fired (phase=\(phase))")
+    func toggle(_ mode: CaptureMode = .command) {
+        Log.debug("voice: hotkey fired (mode=\(mode), phase=\(phase))")
         switch phase {
         case .listening:
+            // Pressing the *other* chord mid-capture switches what the transcript
+            // will be used for, rather than throwing the recording away.
+            captureMode = mode
             speech.stop()
         case .idle, .success, .failure:
+            captureMode = mode
             beginListening()
         case .thinking:
             break
@@ -138,6 +155,11 @@ final class VoiceAssistant: ObservableObject {
     private func handle(_ text: String) {
         set(.thinking)
 
+        if captureMode == .dictation {
+            dictate(text)
+            return
+        }
+
         switch VoiceIntentParser.parse(text) {
         case .openVault(let query):
             openVault(query)
@@ -179,6 +201,31 @@ final class VoiceAssistant: ObservableObject {
         } else {
             set(.failure(message: "Couldn't open \(vault.name)"))
             scheduleReset(after: 4)
+        }
+    }
+
+    /// Types the transcript into whatever has keyboard focus.
+    ///
+    /// The island is a non-activating panel, so showing it never stole focus from
+    /// the text field the user was in — which is exactly what makes typing into
+    /// that field possible a moment later.
+    private func dictate(_ text: String) {
+        inserter.insert(text) { [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+            case .typed(let count):
+                // Collapse immediately: the words are already in the field and the
+                // user is looking at them, not at a panel confirming it.
+                Log.debug("voice: dictated \(count) chars, collapsing")
+                self.dismiss()
+            case .copiedToClipboard:
+                self.set(.success(headline: "Copied — press ⌘V",
+                                  detail: "Allow Accessibility to type it in directly"))
+                self.scheduleReset(after: 4)
+            case .empty:
+                self.set(.failure(message: "Didn't catch that — try again"))
+                self.scheduleReset(after: 3)
+            }
         }
     }
 

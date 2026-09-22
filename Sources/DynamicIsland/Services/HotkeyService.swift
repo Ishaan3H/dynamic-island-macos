@@ -1,51 +1,98 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Global hotkey for the voice assistant: ⌃⌥Space.
+/// Global hotkeys, via Carbon's `RegisterEventHotKey`.
 ///
-/// Uses Carbon's `RegisterEventHotKey` rather than an `NSEvent` global monitor,
-/// and that choice is load-bearing. A global *keyboard* monitor requires an Input
-/// Monitoring / Accessibility grant; `RegisterEventHotKey` requires **nothing**.
+/// Chosen over an `NSEvent` global monitor for one reason: a global *keyboard*
+/// monitor requires an Input Monitoring / Accessibility grant, and
+/// `RegisterEventHotKey` requires **nothing**.
 ///
 /// The cost is that Carbon cannot register a bare modifier chord — a hotkey needs
-/// a real key. So ⌃⌥ alone would mean going back to an event monitor and asking
-/// the user for Accessibility. ⌃⌥Space avoids that entirely, and has the side
-/// benefit of not firing every time ⌃⌥ is pressed as the prefix of some other
-/// shortcut.
+/// a real key. That is why both shortcuts here include one, rather than being
+/// modifier-only combinations in the style of other dictation tools.
 final class HotkeyService {
 
-    /// Fired on the main thread each time the chord is pressed.
-    var onTrigger: (() -> Void)?
+    /// One registered chord.
+    struct Chord {
+        let key: Int
+        let modifiers: Int
+        let handler: () -> Void
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
+        static func controlOption(_ key: Int, _ handler: @escaping () -> Void) -> Chord {
+            Chord(key: key, modifiers: controlKey | optionKey, handler: handler)
+        }
+    }
 
-    /// Four-char code identifying our hotkey to Carbon: 'ISLD'.
+    /// Four-char code identifying our hotkeys to Carbon: 'ISLD'.
     private static let signature: OSType = 0x49_53_4C_44
 
+    private var refs: [EventHotKeyRef?] = []
+    private var handlers: [UInt32: () -> Void] = [:]
+    private var handlerRef: EventHandlerRef?
+    private var nextID: UInt32 = 1
+
+    /// Installs the shared Carbon handler once, then registers each chord.
+    /// Returns the chords that could not be claimed — usually because another app
+    /// already owns them.
     @discardableResult
-    func register() -> Bool {
+    func register(_ chords: [Chord]) -> [Chord] {
+        installHandlerIfNeeded()
+
+        var failed: [Chord] = []
+        for chord in chords {
+            let id = nextID
+            nextID += 1
+
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                UInt32(chord.key),
+                UInt32(chord.modifiers),
+                EventHotKeyID(signature: Self.signature, id: id),
+                GetApplicationEventTarget(),
+                0,
+                &ref
+            )
+
+            if status == noErr {
+                handlers[id] = chord.handler
+                refs.append(ref)
+                Log.debug("hotkey: registered id=\(id) key=\(chord.key)")
+            } else {
+                // -9868 (eventHotKeyExistsErr) means something else owns it.
+                Log.debug("hotkey: could not register key \(chord.key) (status \(status))")
+                failed.append(chord)
+            }
+        }
+        return failed
+    }
+
+    private func installHandlerIfNeeded() {
+        guard handlerRef == nil else { return }
+
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
 
-        let installStatus = InstallEventHandler(
+        InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, context in
                 guard let context, let event else { return noErr }
 
-                // Confirm it's ours before acting — other hotkeys route here too.
-                var pressedID = EventHotKeyID()
+                var pressed = EventHotKeyID()
                 GetEventParameter(
                     event, EventParamName(kEventParamDirectObject),
                     EventParamType(typeEventHotKeyID), nil,
-                    MemoryLayout<EventHotKeyID>.size, nil, &pressedID
+                    MemoryLayout<EventHotKeyID>.size, nil, &pressed
                 )
-                guard pressedID.signature == HotkeyService.signature else { return noErr }
+                guard pressed.signature == HotkeyService.signature else { return noErr }
 
                 let service = Unmanaged<HotkeyService>.fromOpaque(context).takeUnretainedValue()
-                DispatchQueue.main.async { service.onTrigger?() }
+                // Dispatch by id — every hotkey in the app routes through this one
+                // handler, so it has to know which chord actually fired.
+                if let handler = service.handlers[pressed.id] {
+                    DispatchQueue.main.async(execute: handler)
+                }
                 return noErr
             },
             1,
@@ -53,34 +100,13 @@ final class HotkeyService {
             Unmanaged.passUnretained(self).toOpaque(),
             &handlerRef
         )
-        guard installStatus == noErr else {
-            Log.debug("hotkey: InstallEventHandler failed (\(installStatus))")
-            return false
-        }
-
-        let id = EventHotKeyID(signature: Self.signature, id: 1)
-        let status = RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(controlKey | optionKey),
-            id,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-
-        if status == noErr {
-            Log.debug("hotkey: ⌃⌥Space registered")
-            return true
-        }
-        // -9868 (eventHotKeyExistsErr) means something else already owns it.
-        Log.debug("hotkey: RegisterEventHotKey failed (\(status)) — chord may be taken")
-        return false
     }
 
     func unregister() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        for ref in refs where ref != nil { UnregisterEventHotKey(ref) }
+        refs.removeAll()
+        handlers.removeAll()
         if let handlerRef { RemoveEventHandler(handlerRef) }
-        hotKeyRef = nil
         handlerRef = nil
     }
 

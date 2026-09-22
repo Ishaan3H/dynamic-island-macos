@@ -19,8 +19,26 @@ struct VoiceView: View {
                     row(icon: "circle.dotted", tint: Theme.secondary,
                         title: "Working…", subtitle: nil)
                 case .success(let headline, let detail):
-                    row(icon: "checkmark.circle.fill", tint: Theme.accent,
-                        title: headline, subtitle: detail)
+                    VStack(alignment: .leading, spacing: 7) {
+                        row(icon: "checkmark.circle.fill", tint: Theme.accent,
+                            title: headline, subtitle: detail)
+
+                        // Shown only when dictation fell back to the clipboard —
+                        // that is the one success that the user can upgrade.
+                        if isDictating && !voice.inserter.isTrusted {
+                            Button {
+                                voice.inserter.openAccessibilitySettings()
+                            } label: {
+                                Text("Allow Accessibility")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(Theme.accent))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 case .failure(let message):
                     failure(message)
                 case .idle:
@@ -39,7 +57,7 @@ struct VoiceView: View {
 
     private var header: some View {
         HStack(spacing: 7) {
-            Image(systemName: "mic.fill")
+            Image(systemName: isDictating ? "text.cursor" : "mic.fill")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(voice.phase == .listening ? Theme.accent : Theme.tertiary)
 
@@ -57,9 +75,11 @@ struct VoiceView: View {
         .padding(.top, 8)
     }
 
+    private var isDictating: Bool { voice.captureMode == .dictation }
+
     private var headline: String {
         switch voice.phase {
-        case .listening: return "LISTENING"
+        case .listening: return isDictating ? "DICTATING" : "LISTENING"
         case .thinking:  return "THINKING"
         case .success:   return "DONE"
         case .failure:   return "DIDN’T WORK"
@@ -71,15 +91,26 @@ struct VoiceView: View {
         VStack(alignment: .leading, spacing: 8) {
             VoiceWaveform(level: voice.level)
 
-            Text(voice.transcript.isEmpty
-                 ? "“setup design review at 6pm to 7:30pm”"
-                 : voice.transcript)
+            Text(voice.transcript.isEmpty ? placeholder : voice.transcript)
                 .font(.system(size: 12, weight: voice.transcript.isEmpty ? .regular : .medium))
                 .foregroundStyle(voice.transcript.isEmpty ? Theme.tertiary : Theme.primary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .animation(nil, value: voice.transcript)
+
+            if isDictating {
+                Text(voice.inserter.isTrusted
+                     ? "types into the focused field"
+                     : "will copy to clipboard — allow Accessibility to type directly")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+            }
         }
+    }
+
+    private var placeholder: String {
+        isDictating ? "just start talking…" : "“setup design review at 6pm to 7:30pm”"
     }
 
     private func row(icon: String, tint: Color, title: String, subtitle: String?) -> some View {
